@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Kigali Night Racer</title>
+<style>
+:root{--night:#12102b;--road:#23203f;--sun:#ff8a3d;--pink:#ff3d7f;--teal:#2de2c4;--cream:#fff3df}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--night);color:var(--cream);font-family:"Trebuchet MS",Verdana,sans-serif;overscroll-behavior:none;touch-action:none}
+body{display:flex;align-items:center;justify-content:center}
+#wrap{position:relative;height:min(100vh,860px);aspect-ratio:400/700;max-width:100vw}
+canvas{display:block;width:100%;height:100%;border-radius:14px;box-shadow:0 0 50px #ff3d7f44}
+#ui{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;background:#12102bdd;border-radius:14px}
+h1{margin:0;font-size:clamp(30px,8vw,44px);line-height:1;letter-spacing:.02em;color:var(--sun);text-shadow:0 0 18px #ff8a3d88}
+#msg{margin:0;font-size:18px;line-height:1.4;max-width:30ch}
+button{font:inherit;font-weight:700;font-size:20px;padding:12px 32px;border:0;border-radius:999px;background:var(--teal);color:var(--night);cursor:pointer}
+button:hover{background:var(--cream)}
+button:focus-visible{outline:3px solid var(--pink);outline-offset:3px}
+small{opacity:.75;max-width:32ch;line-height:1.4}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="400" height="700" aria-label="Racing game"></canvas>
+  <div id="ui">
+    <h1>Kigali Night Racer</h1>
+    <p id="msg">Dodge the traffic, grab coins, and see how far you can drive.</p>
+    <button id="btn">Start driving</button>
+    <small>Steer with the left and right arrow keys or A and D. On a phone, hold the left or right side of the screen.</small>
+  </div>
+</div>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const ui = document.getElementById('ui'), msg = document.getElementById('msg'), btn = document.getElementById('btn');
+const W = 400, H = 700, L = 40, R = 360, LANE = 80;
+const COLORS = ['#ff3d7f', '#2de2c4', '#ffd23d', '#8f7bff', '#ff8a3d'];
+let best = 0;
+try { best = +localStorage.getItem('kigaliRacerBest') || 0; } catch (e) {}
+
+let state = 'menu', s, dist, player, cars, coins, spawnT, coinT, roadY, got, shake, lastLane;
+const keys = { l: false, r: false };
+
+function reset() {
+  s = 6; dist = 0; got = 0; shake = 0; roadY = 0; spawnT = 120; coinT = 300; lastLane = -1;
+  player = { x: W / 2, vx: 0, y: H - 120, w: 42, h: 68 };
+  cars = []; coins = [];
+}
+reset();
+
+let ac;
+function beep(f, d, type, v) {
+  try {
+    ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type || 'square'; o.frequency.value = f; g.gain.value = v || 0.05;
+    o.connect(g); g.connect(ac.destination); o.start();
+    g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + d); o.stop(ac.currentTime + d);
+  } catch (e) {}
+}
+
+function start() {
+  reset(); state = 'play'; ui.style.display = 'none';
+  beep(440, 0.12); setTimeout(() => beep(660, 0.15), 120);
+}
+function crash() {
+  state = 'over'; shake = 16;
+  beep(110, 0.5, 'sawtooth', 0.12);
+  const score = getScore();
+  const isBest = score > best;
+  if (isBest) { best = score; try { localStorage.setItem('kigaliRacerBest', best); } catch (e) {} }
+  msg.textContent = 'Crashed! Score ' + score + (isBest ? ' (new best!)' : '. Best ' + best + '.');
+  btn.textContent = 'Drive again';
+  setTimeout(() => { ui.style.display = 'flex'; btn.focus(); }, 700);
+}
+const getScore = () => Math.floor(dist / 10) + got * 25;
+
+function spawnCar(lane) {
+  cars.push({ x: L + LANE * lane + LANE / 2, y: -90, w: 48, h: 68, v: 2 + Math.random() * 2.5, c: COLORS[Math.random() * COLORS.length | 0] });
+}
+function update(dt) {
+  const a = 1.1 * dt;
+  if (keys.l) player.vx -= a;
+  if (keys.r) player.vx += a;
+  player.vx = Math.max(-7, Math.min(7, player.vx * Math.pow(0.85, dt)));
+  player.x += player.vx * dt;
+  const lo = L + player.w / 2 + 4, hi = R - player.w / 2 - 4;
+  if (player.x < lo) { player.x = lo; player.vx = 0; }
+  if (player.x > hi) { player.x = hi; player.vx = 0; }
+
+  s = Math.min(16, s + 0.0015 * dt);
+  dist += s * dt; roadY = (roadY + s * dt) % 80;
+
+  spawnT -= s * dt;
+  if (spawnT <= 0) {
+    let lane; do { lane = Math.random() * 4 | 0; } while (lane === lastLane);
+    lastLane = lane; spawnCar(lane);
+    if (s > 9 && Math.random() < 0.3) { let l2; do { l2 = Math.random() * 4 | 0; } while (l2 === lane); spawnCar(l2); }
+    spawnT = Math.max(120, 270 - s * 8) + Math.random() * 90;
+  }
+  coinT -= s * dt;
+  if (coinT <= 0) {
+    const x = L + LANE * (Math.random() * 4 | 0) + LANE / 2;
+    for (let i = 0; i < 3; i++) coins.push({ x, y: -20 - i * 45 });
+    coinT = 420 + Math.random() * 300;
+  }
+
+  for (const c of cars) c.y += (s - c.v) * dt;
+  for (const k of coins) k.y += s * dt;
+  cars = cars.filter(c => c.y < H + 100);
+  coins = coins.filter(k => k.y < H + 30);
+
+  for (const c of cars) {
+    if (Math.abs(c.x - player.x) < (c.w + player.w) / 2 - 4 && Math.abs(c.y - player.y) < (c.h + player.h) / 2 - 6) { crash(); return; }
+  }
+  coins = coins.filter(k => {
+    if (Math.hypot(k.x - player.x, k.y - player.y) < 30) { got++; beep(880 + got % 5 * 60, 0.08, 'triangle', 0.06); return false; }
+    return true;
+  });
+}
+
+function car(x, y, w, h, color, tilt) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(tilt || 0);
+  ctx.shadowColor = color; ctx.shadowBlur = 14; ctx.fillStyle = color;
+  ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, 10); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#12102bcc';
+  ctx.beginPath(); ctx.roundRect(-w / 2 + 5, -h / 2 + 16, w - 10, 18, 5); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(-w / 2 + 6, h / 2 - 24, w - 12, 12, 4); ctx.fill();
+  ctx.fillStyle = '#fff3b0'; ctx.fillRect(-w / 2 + 3, -h / 2 + 2, 8, 5); ctx.fillRect(w / 2 - 11, -h / 2 + 2, 8, 5);
+  ctx.fillStyle = '#ff2b2b'; ctx.fillRect(-w / 2 + 3, h / 2 - 6, 8, 4); ctx.fillRect(w / 2 - 11, h / 2 - 6, 8, 4);
+  ctx.restore();
+}
+
+function draw() {
+  ctx.save();
+  if (shake > 0) { ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake); shake *= 0.9; }
+  ctx.fillStyle = '#12102b'; ctx.fillRect(-20, -20, W + 40, H + 40);
+  // roadside lights
+  for (let y = -120 + (roadY * 1.5) % 120; y < H; y += 120) {
+    ctx.fillStyle = '#ff8a3d'; ctx.fillRect(14, y, 6, 22);
+    ctx.fillStyle = '#2de2c4'; ctx.fillRect(W - 20, y + 60, 6, 22);
+  }
+  // road
+  ctx.fillStyle = '#23203f'; ctx.fillRect(L, 0, R - L, H);
+  ctx.shadowBlur = 12;
+  ctx.shadowColor = '#ff3d7f'; ctx.fillStyle = '#ff3d7f'; ctx.fillRect(L - 4, 0, 4, H);
+  ctx.shadowColor = '#2de2c4'; ctx.fillStyle = '#2de2c4'; ctx.fillRect(R, 0, 4, H);
+  ctx.shadowBlur = 0; ctx.fillStyle = '#fff3df55';
+  for (let k = 1; k < 4; k++) for (let y = -80 + roadY; y < H; y += 80) ctx.fillRect(L + LANE * k - 2, y, 4, 40);
+
+  for (const k of coins) {
+    ctx.fillStyle = '#ffd23d'; ctx.shadowColor = '#ffd23d'; ctx.shadowBlur = 10;
+    ctx.beginPath(); ctx.arc(k.x, k.y, 10, 0, 7); ctx.fill();
+    ctx.shadowBlur = 0; ctx.fillStyle = '#b8860b'; ctx.fillRect(k.x - 2, k.y - 5, 4, 10);
+  }
+  for (const c of cars) car(c.x, c.y, c.w, c.h, c.c, 0);
+  car(player.x, player.y, player.w, player.h, '#fff3df', player.vx * 0.02);
+  ctx.restore();
+
+  if (state !== 'menu') {
+    ctx.fillStyle = '#fff3df'; ctx.font = 'bold 22px "Trebuchet MS", sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText('Score ' + getScore(), 54, 34);
+    ctx.fillStyle = '#ffd23d'; ctx.fillText('Coins ' + got, 54, 62);
+    ctx.textAlign = 'right'; ctx.fillStyle = '#2de2c4'; ctx.fillText(Math.round(s * 12) + ' km/h', 346, 34);
+    ctx.fillStyle = '#fff3dfaa'; ctx.font = '16px "Trebuchet MS", sans-serif'; ctx.fillText('Best ' + best, 346, 60);
+  }
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(2.5, (now - last) / 16.67); last = now;
+  if (state === 'play') update(dt);
+  else if (state === 'menu') { roadY = (roadY + 3 * dt) % 80; }
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+btn.addEventListener('click', start);
+addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.l = true;
+  if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.r = true;
+  if ((e.key === 'Enter' || e.key === ' ') && ui.style.display !== 'none' && state !== 'play') { e.preventDefault(); start(); }
+});
+addEventListener('keyup', e => {
+  if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.l = false;
+  if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.r = false;
+});
+function touch(e) {
+  const r = cv.getBoundingClientRect(), left = (e.clientX - r.left) < r.width / 2;
+  keys.l = left; keys.r = !left;
+}
+cv.addEventListener('pointerdown', touch);
+cv.addEventListener('pointermove', e => { if (e.buttons || e.pointerType === 'touch') touch(e); });
+['pointerup', 'pointercancel', 'pointerleave'].forEach(t => cv.addEventListener(t, () => { keys.l = keys.r = false; }));
+</script>
+</body>
+</html>
